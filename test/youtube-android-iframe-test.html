@@ -172,12 +172,13 @@
         });
       }
 
-      window.addEventListener("message", function (event) {
+      document.addEventListener("message", function (event) {
         const { data } = event;
 
         try {
           const parsedData = JSON.parse(data);
           const { eventName, meta } = parsedData;
+          console.log(eventName);
 
           switch (eventName) {
             case "playVideo":
