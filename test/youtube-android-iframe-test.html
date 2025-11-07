@@ -1,51 +1,213 @@
 <!DOCTYPE html>
 <html>
   <head>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, " />
+    <style>
+      body {
+        margin: 0;
+        width: 100vw;
+        height: 100vh;
+        padding: 0;
+      }
+      .container {
+        position: relative;
+        width: 100vw;
+        height: 100vh;
+      }
+      .video {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+      }
+    </style>
   </head>
+
   <body>
-    <div id="player"></div>
+    <div class="container">
+      <div class="video" id="player"></div>
+    </div>
 
     <script>
-      const videoId = new URLSearchParams(window.location.search).get(
-        "video_id"
-      );
+      const randomPlayerId = "player" + Date.now();
+      document.getElementById("player").id = randomPlayerId;
 
-      if (videoId) {
-        var tag = document.createElement("script");
+      const parsedUrl = new URL(window.location.href);
+      const UrlQueryData = parsedUrl.searchParams.get("data");
+
+      const {
+        end,
+        list,
+        color,
+        start,
+        rel_s,
+        loop_s,
+        listType,
+        playerLang,
+        playlist,
+        videoId_s,
+        controls_s,
+        cc_lang_pref_s,
+        contentScale_s,
+        allowWebViewZoom,
+        modestbranding_s,
+        iv_load_policy,
+        preventFullScreen_s,
+        showClosedCaptions_s,
+      } = JSON.parse(UrlQueryData);
+
+      let isFullScreen = false;
+
+      /** init meta data */
+      function initMetaData() {
+        let metaString = "";
+        if (contentScale_s) {
+          metaString += `initial-scale=${contentScale_s}, `;
+        }
+
+        if (!allowWebViewZoom) {
+          metaString += `maximum-scale=${contentScale_s}`;
+        }
+
+        const viewport = document.querySelector("meta[name=viewport]");
+        viewport.setAttribute("content", "width=device-width, " + metaString);
+      }
+
+      /** init youtube iframe api */
+      function initYoutubeIframeAPI() {
+        let tag = document.createElement("script");
         tag.src = "https://www.youtube.com/iframe_api";
-        var firstScriptTag = document.getElementsByTagName("script")[0];
+        let firstScriptTag = document.getElementsByTagName("script")[0];
         firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
+      }
 
-        var player;
-        function onYouTubeIframeAPIReady() {
-          player = new YT.Player("player", {
-            height: "390",
-            width: "640",
-            videoId: videoId, // Replace with your desired YouTube video ID
-            playerVars: {
-              playsinline: 1,
-              autoplay: 1, // This enables autoplay
-            },
-            events: {
-              onReady: onPlayerReady,
-              onStateChange: onPlayerStateChange,
-            },
-          });
-        }
-
-        function onPlayerReady(event) {}
-
-        var done = false;
-        function onPlayerStateChange(event) {
-          if (event.data == YT.PlayerState.PLAYING && !done) {
-          }
-        }
-
-        function stopVideo() {
-          player.stopVideo();
+      /** send message to rn */
+      function sendMessageToRN(msg) {
+        if (
+          window.ReactNativeWebView &&
+          window.ReactNativeWebView.postMessage
+        ) {
+          window.ReactNativeWebView.postMessage(JSON.stringify(msg));
         }
       }
+
+      initMetaData();
+
+      initYoutubeIframeAPI();
+
+      function handleFullScreenChange() {
+        isFullScreen =
+          document.fullscreenElement ||
+          document.msFullscreenElement ||
+          document.mozFullScreenElement ||
+          document.webkitFullscreenElement;
+
+        sendMessageToRN({
+          eventType: "fullScreenChange",
+          data: Boolean(isFullScreen),
+        });
+      }
+
+      document.addEventListener("fullscreenchange", handleFullScreenChange);
+      document.addEventListener("msfullscreenchange", handleFullScreenChange);
+      document.addEventListener("mozfullscreenchange", handleFullScreenChange);
+      document.addEventListener(
+        "webkitfullscreenchange",
+        handleFullScreenChange
+      );
+
+      var player;
+
+      function onPlayerError(event) {
+        sendMessageToRN({ eventType: "playerError", data: event.data });
+      }
+
+      function onPlaybackRateChange(event) {
+        sendMessageToRN({ eventType: "playbackRateChange", data: event.data });
+      }
+
+      function onPlaybackQualityChange(event) {
+        sendMessageToRN({ eventType: "playerQualityChange", data: event.data });
+      }
+
+      function onPlayerReady(event) {
+        sendMessageToRN({ eventType: "playerReady" });
+      }
+
+      function onPlayerStateChange(event) {
+        sendMessageToRN({ eventType: "playerStateChange", data: event.data });
+      }
+
+      function onYouTubeIframeAPIReady() {
+        player = new YT.Player(randomPlayerId, {
+          width: "1000",
+          height: "1000",
+          videoId: videoId_s,
+          playerVars: {
+            end: end,
+            rel: rel_s,
+            list: list,
+            color: color,
+            loop: loop_s,
+            start: start,
+            playsinline: 1,
+            hl: playerLang,
+            playlist: playlist,
+            listType: listType,
+            controls: controls_s,
+            fs: preventFullScreen_s,
+            cc_lang_pref: cc_lang_pref_s,
+            iv_load_policy: iv_load_policy,
+            modestbranding: modestbranding_s,
+            cc_load_policy: showClosedCaptions_s,
+          },
+          events: {
+            onReady: onPlayerReady,
+            onError: onPlayerError,
+            onStateChange: onPlayerStateChange,
+            onPlaybackRateChange: onPlaybackRateChange,
+            onPlaybackQualityChange: onPlaybackQualityChange,
+          },
+        });
+      }
+
+      window.addEventListener("message", function (event) {
+        const { data } = event;
+
+        try {
+          const parsedData = JSON.parse(data);
+          const { eventName, meta } = parsedData;
+
+          switch (eventName) {
+            case "playVideo":
+              player.playVideo();
+              break;
+
+            case "pauseVideo":
+              player.pauseVideo();
+              break;
+
+            case "muteVideo":
+              player.mute();
+              break;
+
+            case "unMuteVideo":
+              player.unMute();
+              break;
+
+            case "setVolume":
+              player.setVolume(meta.volume);
+              break;
+
+            case "setPlaybackRate":
+              player.setPlaybackRate(meta.playbackRate);
+              break;
+          }
+        } catch (error) {
+          console.error("Error parsing data", event, error);
+        }
+      });
     </script>
   </body>
 </html>
