@@ -1,0 +1,474 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <title>PNG 메타데이터 실험 (tEXt chunk)</title>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      margin: 0;
+      padding: 24px;
+      background: #f3f4f6;
+    }
+    h1 {
+      margin-top: 0;
+      font-size: 24px;
+    }
+    .tabs {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+    .tab-button {
+      padding: 8px 14px;
+      border-radius: 999px;
+      border: 1px solid #d1d5db;
+      background: #e5e7eb;
+      cursor: pointer;
+      font-size: 14px;
+    }
+    .tab-button.active {
+      background: #111827;
+      color: #f9fafb;
+      border-color: #111827;
+    }
+    .card {
+      background: #ffffff;
+      border-radius: 12px;
+      padding: 16px 20px;
+      box-shadow: 0 8px 20px rgba(15,23,42,0.08);
+      max-width: 680px;
+    }
+    .section {
+      display: none;
+    }
+    .section.active {
+      display: block;
+    }
+    label {
+      display: block;
+      font-size: 13px;
+      margin-bottom: 4px;
+      color: #374151;
+      font-weight: 600;
+    }
+    input[type="file"] {
+      margin-bottom: 8px;
+    }
+    textarea {
+      width: 100%;
+      min-height: 80px;
+      padding: 8px;
+      border-radius: 8px;
+      border: 1px solid #d1d5db;
+      resize: vertical;
+      font-size: 13px;
+      box-sizing: border-box;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    }
+    button.action {
+      margin-top: 10px;
+      padding: 8px 14px;
+      border-radius: 999px;
+      border: none;
+      background: #2563eb;
+      color: #f9fafb;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+    }
+    button.action:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    .status {
+      margin-top: 8px;
+      font-size: 12px;
+      color: #6b7280;
+      white-space: pre-wrap;
+    }
+    .status.error {
+      color: #b91c1c;
+    }
+    .status.success {
+      color: #065f46;
+    }
+    .meta-output {
+      margin-top: 8px;
+      background: #f9fafb;
+      border-radius: 8px;
+      padding: 8px;
+      border: 1px dashed #d1d5db;
+      font-size: 12px;
+      white-space: pre-wrap;
+      max-height: 240px;
+      overflow: auto;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    }
+    .download-link {
+      display: inline-block;
+      margin-top: 8px;
+      font-size: 13px;
+      color: #2563eb;
+      text-decoration: none;
+    }
+  </style>
+</head>
+<body>
+  <h1>PNG 메타데이터(tEXt) 실험</h1>
+  <p style="font-size:13px; color:#4b5563; max-width:680px;">
+    PNG 내부의 <code>tEXt</code> 청크(<code>keyword: "meta-json"</code>)에 문자열을 심고 / 다시 읽어오는 간단한 실험 도구입니다.
+    브라우저에서만 동작하며, 파일은 서버로 전송되지 않습니다.
+  </p>
+
+  <div class="tabs">
+    <button class="tab-button active" data-target="write-section">1. Write (심기)</button>
+    <button class="tab-button" data-target="load-section">2. Load (읽기)</button>
+  </div>
+
+  <div class="card">
+    <!-- WRITE SECTION -->
+    <section id="write-section" class="section active">
+      <div>
+        <label for="write-file">PNG 파일 업로드</label>
+        <input id="write-file" type="file" accept="image/png" />
+      </div>
+      <div style="margin-top:10px;">
+        <label for="write-meta">메타데이터 (텍스트 / JSON 등 자유 입력)</label>
+        <textarea id="write-meta" placeholder='예: {"app":"demo","version":"1.0.0"}'></textarea>
+      </div>
+      <button id="write-button" class="action">메타데이터 심어서 PNG 다운로드</button>
+      <div id="write-download-container"></div>
+      <div id="write-status" class="status"></div>
+    </section>
+
+    <!-- LOAD SECTION -->
+    <section id="load-section" class="section">
+      <div>
+        <label for="load-file">PNG 파일 업로드</label>
+        <input id="load-file" type="file" accept="image/png" />
+      </div>
+      <button id="load-button" class="action">메타데이터 읽기</button>
+      <div id="load-status" class="status"></div>
+      <div id="load-meta-output" class="meta-output" style="display:none;"></div>
+    </section>
+  </div>
+
+  <script>
+    // ---- 탭 전환 ----
+    const tabButtons = document.querySelectorAll(".tab-button")
+    const sections = document.querySelectorAll(".section")
+
+    tabButtons.forEach(btn => {
+      btn.addEventListener("click", () => {
+        tabButtons.forEach(b => b.classList.remove("active"))
+        btn.classList.add("active")
+
+        const targetId = btn.dataset.target
+        sections.forEach(sec => {
+          sec.classList.toggle("active", sec.id === targetId)
+        })
+      })
+    })
+
+    // ---- PNG 유틸리티 ----
+    const PNG_SIGNATURE = new Uint8Array([137,80,78,71,13,10,26,10])
+    const TEXT_KEYWORD = "meta-json"
+
+    function uint8ArrayEqual(a, b) {
+      if (a.length !== b.length) return false
+      for (let i = 0; i < a.length; i++) {
+        if (a[i] !== b[i]) return false
+      }
+      return true
+    }
+
+    function concatUint8Arrays(parts) {
+      let totalLength = 0
+      for (const p of parts) totalLength += p.length
+      const out = new Uint8Array(totalLength)
+      let offset = 0
+      for (const p of parts) {
+        out.set(p, offset)
+        offset += p.length
+      }
+      return out
+    }
+
+    // CRC32 테이블 만들기
+    let CRC_TABLE = null
+    function makeCrcTable() {
+      const table = new Uint32Array(256)
+      for (let n = 0; n < 256; n++) {
+        let c = n
+        for (let k = 0; k < 8; k++) {
+          if (c & 1) {
+            c = 0xEDB88320 ^ (c >>> 1)
+          } else {
+            c = c >>> 1
+          }
+        }
+        table[n] = c >>> 0
+      }
+      return table
+    }
+
+    function crc32(bytes) {
+      if (!CRC_TABLE) {
+        CRC_TABLE = makeCrcTable()
+      }
+      let c = 0 ^ (-1)
+      for (let i = 0; i < bytes.length; i++) {
+        const byte = bytes[i]
+        c = (c >>> 8) ^ CRC_TABLE[(c ^ byte) & 0xFF]
+      }
+      return (c ^ (-1)) >>> 0
+    }
+
+    // PNG 파싱: signature 이후의 chunk 목록 추출
+    function parsePngChunks(bytes) {
+      if (!uint8ArrayEqual(bytes.slice(0,8), PNG_SIGNATURE)) {
+        throw new Error("PNG 시그니처가 아닙니다.")
+      }
+      const chunks = []
+      const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+      let offset = 8
+      while (offset < bytes.length) {
+        if (offset + 8 > bytes.length) {
+          throw new Error("PNG chunk header 손상")
+        }
+        const length = view.getUint32(offset) >>> 0
+        const typeBytes = bytes.slice(offset + 4, offset + 8)
+        const type = String.fromCharCode(
+          typeBytes[0],
+          typeBytes[1],
+          typeBytes[2],
+          typeBytes[3]
+        )
+        const dataStart = offset + 8
+        const dataEnd = dataStart + length
+        if (dataEnd + 4 > bytes.length) {
+          throw new Error("PNG chunk data 손상")
+        }
+        const data = bytes.slice(dataStart, dataEnd)
+        // const crc = view.getUint32(dataEnd) // 필요하면 사용
+        chunks.push({ type, data })
+        offset = dataEnd + 4
+        if (type === "IEND") break
+      }
+      return chunks
+    }
+
+    // chunk 목록을 다시 PNG 바이너리로 인코딩
+    function encodePngFromChunks(chunks) {
+      const parts = [PNG_SIGNATURE]
+      const encoder = new TextEncoder()
+      for (const chunk of chunks) {
+        const typeBytes = encoder.encode(chunk.type)
+        if (typeBytes.length !== 4) {
+          throw new Error("Chunk type must be 4 bytes: " + chunk.type)
+        }
+        const length = chunk.data.length
+        const lengthBytes = new Uint8Array(4)
+        new DataView(lengthBytes.buffer).setUint32(0, length, false) // big-endian
+
+        const crcInput = concatUint8Arrays([typeBytes, chunk.data])
+        const crcVal = crc32(crcInput)
+        const crcBytes = new Uint8Array(4)
+        new DataView(crcBytes.buffer).setUint32(0, crcVal, false)
+
+        parts.push(lengthBytes, typeBytes, chunk.data, crcBytes)
+      }
+      return concatUint8Arrays(parts)
+    }
+
+    // tEXt 데이터 빌드: keyword\0text
+    function buildTextChunkData(keyword, text) {
+      const encoder = new TextEncoder()
+      const keyBytes = encoder.encode(keyword)
+      const textBytes = encoder.encode(text)
+      const zero = new Uint8Array([0])
+      return concatUint8Arrays([keyBytes, zero, textBytes])
+    }
+
+    // tEXt 데이터 파싱
+    function parseTextChunkData(data) {
+      let sepIndex = -1
+      for (let i = 0; i < data.length; i++) {
+        if (data[i] === 0) {
+          sepIndex = i
+          break
+        }
+      }
+      if (sepIndex === -1) return { keyword: "", text: "" }
+      const decoder = new TextDecoder()
+      const keyBytes = data.slice(0, sepIndex)
+      const textBytes = data.slice(sepIndex + 1)
+      return {
+        keyword: decoder.decode(keyBytes),
+        text: decoder.decode(textBytes)
+      }
+    }
+
+    // PNG에 meta-json tEXt chunk 삽입
+    function embedMetaInPngBytes(bytes, metaText) {
+      const chunks = parsePngChunks(bytes)
+      const textData = buildTextChunkData(TEXT_KEYWORD, metaText)
+
+      const newChunks = []
+      let inserted = false
+
+      for (const ch of chunks) {
+        newChunks.push(ch)
+        if (ch.type === "IHDR" && !inserted) {
+          // IHDR 바로 뒤에 삽입
+          newChunks.push({ type: "tEXt", data: textData })
+          inserted = true
+        }
+      }
+
+      // 혹시 IHDR 못 찾았으면(이상한 PNG) 그냥 마지막(IEND 앞)에 넣는다
+      if (!inserted) {
+        const last = newChunks.pop()
+        newChunks.push({ type: "tEXt", data: textData })
+        if (last) newChunks.push(last)
+      }
+
+      return encodePngFromChunks(newChunks)
+    }
+
+    // PNG에서 meta-json tEXt chunk 읽기
+    function readMetaFromPngBytes(bytes) {
+      const chunks = parsePngChunks(bytes)
+      for (const ch of chunks) {
+        if (ch.type === "tEXt") {
+          const { keyword, text } = parseTextChunkData(ch.data)
+          if (keyword === TEXT_KEYWORD) {
+            return text
+          }
+        }
+      }
+      return null
+    }
+
+    // ---- WRITE UI 로직 ----
+    const writeFileInput = document.getElementById("write-file")
+    const writeMetaInput = document.getElementById("write-meta")
+    const writeButton = document.getElementById("write-button")
+    const writeStatus = document.getElementById("write-status")
+    const writeDownloadContainer = document.getElementById("write-download-container")
+
+    writeButton.addEventListener("click", () => {
+      writeStatus.textContent = ""
+      writeStatus.className = "status"
+      writeDownloadContainer.innerHTML = ""
+
+      const file = writeFileInput.files && writeFileInput.files[0]
+      const metaText = writeMetaInput.value || ""
+
+      if (!file) {
+        writeStatus.textContent = "PNG 파일을 먼저 선택해주세요."
+        writeStatus.classList.add("error")
+        return
+      }
+
+      writeButton.disabled = true
+      writeStatus.textContent = "처리 중..."
+
+      const reader = new FileReader()
+      reader.onload = () => {
+        try {
+          const bytes = new Uint8Array(reader.result)
+          const outBytes = embedMetaInPngBytes(bytes, metaText)
+
+          const blob = new Blob([outBytes], { type: "image/png" })
+          const url = URL.createObjectURL(blob)
+          const a = document.createElement("a")
+          const fileNameBase = file.name.replace(/\.png$/i, "")
+          a.href = url
+          a.download = fileNameBase + ".meta.png"
+          a.textContent = "👉 메타데이터가 심어진 PNG 다운로드"
+          a.className = "download-link"
+          writeDownloadContainer.appendChild(a)
+
+          writeStatus.textContent = "완료! 아래 링크로 새 PNG를 다운로드하세요."
+          writeStatus.classList.add("success")
+        } catch (err) {
+          console.error(err)
+          writeStatus.textContent = "에러: " + (err && err.message ? err.message : err)
+          writeStatus.classList.add("error")
+        } finally {
+          writeButton.disabled = false
+        }
+      }
+      reader.onerror = () => {
+        writeStatus.textContent = "파일을 읽는 중 오류가 발생했습니다."
+        writeStatus.classList.add("error")
+        writeButton.disabled = false
+      }
+      reader.readAsArrayBuffer(file)
+    })
+
+    // ---- LOAD UI 로직 ----
+    const loadFileInput = document.getElementById("load-file")
+    const loadButton = document.getElementById("load-button")
+    const loadStatus = document.getElementById("load-status")
+    const loadMetaOutput = document.getElementById("load-meta-output")
+
+    loadButton.addEventListener("click", () => {
+      loadStatus.textContent = ""
+      loadStatus.className = "status"
+      loadMetaOutput.style.display = "none"
+      loadMetaOutput.textContent = ""
+
+      const file = loadFileInput.files && loadFileInput.files[0]
+      if (!file) {
+        loadStatus.textContent = "PNG 파일을 먼저 선택해주세요."
+        loadStatus.classList.add("error")
+        return
+      }
+
+      loadButton.disabled = true
+      loadStatus.textContent = "읽는 중..."
+
+      const reader = new FileReader()
+      reader.onload = () => {
+        try {
+          const bytes = new Uint8Array(reader.result)
+          const metaText = readMetaFromPngBytes(bytes)
+          if (metaText == null) {
+            loadStatus.textContent = 'meta-json tEXt 청크를 찾지 못했습니다.'
+            loadStatus.classList.add("error")
+          } else {
+            loadStatus.textContent = '메타데이터를 읽었습니다.'
+            loadStatus.classList.add("success")
+            loadMetaOutput.style.display = "block"
+
+            // JSON이면 예쁘게 출력 시도
+            let pretty = metaText
+            try {
+              const parsed = JSON.parse(metaText)
+              pretty = JSON.stringify(parsed, null, 2)
+            } catch (_) {
+              // JSON이 아니면 그대로
+            }
+            loadMetaOutput.textContent = pretty
+          }
+        } catch (err) {
+          console.error(err)
+          loadStatus.textContent = "에러: " + (err && err.message ? err.message : err)
+          loadStatus.classList.add("error")
+        } finally {
+          loadButton.disabled = false
+        }
+      }
+      reader.onerror = () => {
+        loadStatus.textContent = "파일을 읽는 중 오류가 발생했습니다."
+        loadStatus.classList.add("error")
+        loadButton.disabled = false
+      }
+      reader.readAsArrayBuffer(file)
+    })
+  </script>
+</body>
+</html>
